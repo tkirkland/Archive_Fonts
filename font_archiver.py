@@ -907,6 +907,8 @@ def create_zips(font_families: Dict[str, List[str]], output_dir: str) -> Tuple[L
     families_list = list(font_families.items())
     logger.info(f"Processing all {total_families} font families")
 
+    # TODO: Incorporate Py7Zip
+
     # Use ThreadPoolExecutor for parallel compression
     with concurrent.futures.ThreadPoolExecutor() as executor:
         # Submit all compression tasks
