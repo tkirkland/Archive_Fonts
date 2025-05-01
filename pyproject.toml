@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "archive-fonts"
+version = "0.1.0"
+description = ""
+authors = ["Tony Kirkland <tony@tonykirkland.net>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.13"
+fonttools = "^4.57.0"
+requests = "^2.32.3"
+colorama = "^0.4.6"
+pygithub = "^2.6.1"
+poetry-core = "^2.1.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
