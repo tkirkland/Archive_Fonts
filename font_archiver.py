@@ -855,33 +855,47 @@ def _create_zip_with_7zip(font_paths: List[str], zip_path: str) -> bool:
         # Get CPU core count to determine compression level
         cpu_cores = _get_cpu_core_count()
         # Use a compression level based on CPU cores but cap it at 9
-        compression_level = min(cpu_cores, 9)
+        compression_level = min(cpu_cores - 5, 9)
 
-        # Prepare the 7zip command with required switches
-        cmd = [
-            "7z", "a",  # Add to archive
-            "-t7z",  # 7z archive type
-            f"-mx={compression_level}",  # Compression level based on CPU cores
-            "-m0=lzma2",  # LZMA2 compression method
-            zip_path  # Output file
-        ]
+        # Create a temporary directory to store the files with just their basename
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Copy each font file to the temporary directory with just its basename
+            temp_font_paths = []
+            for font_path in font_paths:
+                basename = os.path.basename(font_path)
+                temp_font_path = os.path.join(temp_dir, basename)
+                shutil.copy2(font_path, temp_font_path)
+                temp_font_paths.append(basename)  # Store the basename
 
-        # Add all font files to the command
-        cmd.extend(font_paths)
+            # Prepare the 7zip command with required switches
+            cmd = [
+                "7z", "a",  # Add to archive
+                "-t7z",  # 7z archive type
+                f"-mx={compression_level}",  # Compression level based on CPU cores
+                "-m0=lzma2",  # LZMA2 compression method
+                zip_path  # Output file
+            ]
 
-        # Execute the 7zip command
-        process = subprocess.run(
-            cmd, 
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False
-        )
+            # Set the working directory to the temporary directory
+            # This ensures only the basename are included in the archive
 
-        # Check if the command was successful
-        if process.returncode != 0:
-            logger.error(f"7zip command failed with return code {process.returncode}: {process.stderr}")
-            return False
+            # Add all font files to the command (just the basename)
+            cmd.extend(temp_font_paths)
+
+            # Execute the 7zip command from the temporary directory
+            process = subprocess.run(
+                cmd, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+                cwd=temp_dir  # Set the working directory to the temporary directory
+            )
+
+            # Check if the command was successful
+            if process.returncode != 0:
+                logger.error(f"7zip command failed with return code {process.returncode}: {process.stderr}")
+                return False
 
         # Verify the 7z file was created and is valid
         if not _verify_7z_file(zip_path):
