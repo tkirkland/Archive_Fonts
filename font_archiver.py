@@ -11,14 +11,17 @@ import datetime
 import getpass
 import glob
 import logging
+import multiprocessing
 import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
 import zipfile
+from logging import Logger
 from typing import Dict, List, Set, Tuple, Optional, Any
 
 import fontTools.ttLib as ttLib
@@ -71,7 +74,7 @@ console_formatter = NoMicrosecondsFormatter('%(asctime)s - %(levelname)s - %(mes
 console_handler.setFormatter(console_formatter)
 
 # Configure the root logger with just a console handler initially
-logger = logging.getLogger()
+logger: Logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addHandler(console_handler)
 # Remove default handlers
@@ -506,35 +509,37 @@ def _ensure_output_directory(zip_path: str, family_name: str) -> bool:
 
 def _handle_existing_zip(zip_path: str) -> str:
     """
-    Handle an existing zip file by removing it or generating a new name.
+    Handle an existing archive file by removing it or generating a new name.
 
     Args:
-        zip_path: Path to the output zip file
+        zip_path: Path to the output archive file
 
     Returns:
-        The path to use for the zip file
+        The path to use for the archive file
     """
     if os.path.exists(zip_path):
         try:
             os.remove(zip_path)
             return zip_path
         except Exception as e:
-            logger.warning(f"Could not remove existing zip file {zip_path}: {e}")
+            logger.warning(f"Could not remove existing archive file {zip_path}: {e}")
             # If we can't remove it, use a different name
+            # Preserve the original file extension (.zip or .7z)
+            file_ext = os.path.splitext(zip_path)[1]
             return os.path.join(
                 os.path.dirname(zip_path),
-                f"{os.path.splitext(os.path.basename(zip_path))[0]}_{int(time.time())}.zip"
+                f"{os.path.splitext(os.path.basename(zip_path))[0]}_{int(time.time())}{file_ext}"
             )
     return zip_path
 
 
 def _move_zip_file(rel_zip_path: str, zip_path: str, family_name: str) -> bool:
     """
-    Move the zip file to the correct location.
+    Move the archive file to the correct location.
 
     Args:
-        rel_zip_path: Relative path to the output zip file
-        zip_path: Absolute path to the output zip file
+        rel_zip_path: Relative path to the output archive file
+        zip_path: Absolute path to the output archive file
         family_name: The name of the font family for logging
 
     Returns:
@@ -544,7 +549,7 @@ def _move_zip_file(rel_zip_path: str, zip_path: str, family_name: str) -> bool:
         shutil.move(rel_zip_path, zip_path)
         return True
     except Exception as e:
-        logger.error(f"Error moving zip file for {family_name}: {str(e)}")
+        logger.error(f"Error moving archive file for {family_name}: {str(e)}")
         return False
 
 
@@ -625,6 +630,46 @@ def _verify_zip_file(zip_path: str) -> bool:
         return False
 
 
+def _verify_7z_file(zip_path: str) -> bool:
+    """
+    Verify that the 7z file was created and is valid.
+
+    Args:
+        zip_path: Path to the output 7z file
+
+    Returns:
+        True if the 7z file exists and is valid, False otherwise
+    """
+    # Verify the 7z file was created
+    if not os.path.exists(zip_path):
+        logger.error(f"7z file {zip_path} was not created")
+        return False
+
+    # Verify the 7z file is valid using the 7z command-line tool
+    try:
+        # Use 7z t (test) command to verify the archive
+        process = subprocess.run(
+            ["7z", "t", zip_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+
+        # Check if the test was successful
+        if process.returncode != 0:
+            logger.error(f"7z file {zip_path} is corrupted: {process.stderr}")
+            return False
+
+        return True
+    except FileNotFoundError:
+        logger.error("7zip command-line tool (7z) not found. Cannot verify 7z file.")
+        return False
+    except Exception as e:
+        logger.error(f"Error verifying 7z file {zip_path}: {str(e)}")
+        return False
+
+
 def _create_zip_with_zipfile(font_paths: List[str], zip_path: str) -> bool:
     """
     Create a zip file using Python's zipfile module.
@@ -677,23 +722,23 @@ def _sanitize_name(family_name: str) -> str:
 
 def _prepare_zip_path(family_name: str, output_dir: str) -> Tuple[str, str]:
     """
-    Prepare the zip file path for a font family.
+    Prepare the archive file path for a font family.
 
     Args:
         family_name: The name of the font family
-        output_dir: Directory to save the zip file
+        output_dir: Directory to save the archive file
 
     Returns:
-        Tuple of (absolute_zip_path, sanitized_name)
+        Tuple of (absolute_archive_path, sanitized_name)
     """
     # Sanitize family name for filename
     safe_name = _sanitize_name(family_name)
 
-    # Ensure we're using .zip extension, not .7z
-    zip_path = os.path.join(output_dir, f"{safe_name}.zip")
+    # Use .7z extension for 7zip archives
+    archive_path = os.path.join(output_dir, f"{safe_name}.7z")
 
     # Convert to an absolute path to avoid issues when changing directories
-    return os.path.abspath(zip_path), safe_name
+    return os.path.abspath(archive_path), safe_name
 
 
 def _setup_temp_directory(output_dir: str, safe_name: str) -> str:
@@ -732,54 +777,157 @@ def _setup_temp_directory(output_dir: str, safe_name: str) -> str:
 
 def _get_retry_path(original_path: str, retry_count: int) -> str:
     """
-    Generate a retry path for a zip file.
+    Generate a retry path for an archive file.
 
     Args:
-        original_path: Original path to the zip file
+        original_path: Original path to the archive file
         retry_count: Current retry count
 
     Returns:
         New path with retry suffix
     """
+    # Preserve the original file extension (.zip or .7z)
+    file_ext = os.path.splitext(original_path)[1]
     return os.path.join(
         os.path.dirname(original_path),
-        f"{os.path.splitext(os.path.basename(original_path))[0]}_retry{retry_count}.zip"
+        f"{os.path.splitext(os.path.basename(original_path))[0]}_retry{retry_count}{file_ext}"
     )
 
 
 def _get_zip_size(zip_path: str) -> int:
     """
-    Get the size of a zip file.
+    Get the size of an archive file.
 
     Args:
-        zip_path: Path to the zip file
+        zip_path: Path to the archive file
 
     Returns:
-        Size of the zip file in bytes, or 0 if an error occurs
+        Size of the archive file in bytes, or 0 if an error occurs
     """
     try:
         return os.path.getsize(zip_path)
     except Exception as e:
-        logger.error(f"Error getting size of zip file {zip_path}: {str(e)}")
+        logger.error(f"Error getting size of archive file {zip_path}: {str(e)}")
         return 0
 
 
-def _create_zip_with_strategy(font_paths: List[str], zip_path: str) -> bool:
+def _get_cpu_core_count() -> int:
     """
-    Create a zip file using Python's zipfile module.
+    Get the number of CPU cores on the host machine.
+
+    Returns:
+        Number of CPU cores
+    """
+    try:
+        return multiprocessing.cpu_count()
+    except Exception as e:
+        logger.warning(f"Error getting CPU core count: {str(e)}. Using default value of 4.")
+        return 4
+
+
+def _create_zip_with_7zip(font_paths: List[str], zip_path: str) -> bool:
+    """
+    Create a 7z archive using the 7zip command-line tool.
 
     Args:
         font_paths: List of paths to font files
-        zip_path: Path to the output zip file
+        zip_path: Path to the output 7z file
 
     Returns:
         True if successful, False otherwise
     """
-    # Ensure the file extension is .zip
+    try:
+        # Ensure the file extension is .7z
+        if not zip_path.lower().endswith('.7z'):
+            zip_path = os.path.splitext(zip_path)[0] + '.7z'
+
+        # Ensure the output directory exists
+        if not _ensure_output_directory(zip_path, os.path.basename(zip_path)):
+            return False
+
+        # If the destination file already exists, handle it
+        zip_path = _handle_existing_zip(zip_path)
+
+        # Verify all font paths exist before attempting to create the archive
+        if not _verify_font_paths(font_paths, zip_path):
+            return False
+
+        # Get CPU core count to determine compression level
+        cpu_cores = _get_cpu_core_count()
+        # Use a compression level based on CPU cores but cap it at 9
+        compression_level = min(cpu_cores, 9)
+
+        # Prepare the 7zip command with required switches
+        cmd = [
+            "7z", "a",  # Add to archive
+            "-t7z",  # 7z archive type
+            f"-mx={compression_level}",  # Compression level based on CPU cores
+            "-m0=lzma2",  # LZMA2 compression method
+            zip_path  # Output file
+        ]
+
+        # Add all font files to the command
+        cmd.extend(font_paths)
+
+        # Execute the 7zip command
+        process = subprocess.run(
+            cmd, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False
+        )
+
+        # Check if the command was successful
+        if process.returncode != 0:
+            logger.error(f"7zip command failed with return code {process.returncode}: {process.stderr}")
+            return False
+
+        # Verify the 7z file was created and is valid
+        if not _verify_7z_file(zip_path):
+            return False
+
+        logger.info(f"Successfully created 7z archive {zip_path} with compression level {compression_level}")
+        return True
+
+    except FileNotFoundError:
+        logger.error("7zip command-line tool (7z) not found. Please install 7zip and ensure it's in your PATH.")
+        return False
+    except Exception as e:
+        logger.error(f"Error creating 7z archive {zip_path}: {str(e)}")
+        return False
+
+
+def _create_zip_with_strategy(font_paths: List[str], zip_path: str) -> bool:
+    """
+    Create an archive using the appropriate strategy (7zip or zipfile).
+
+    Args:
+        font_paths: List of paths to font files
+        zip_path: Path to the output archive file
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Try to use 7zip first
+    try:
+        # Change the extension to .7z
+        seven_zip_path = os.path.splitext(zip_path)[0] + '.7z'
+
+        # Use 7zip to create the archive
+        if _create_zip_with_7zip(font_paths, seven_zip_path):
+            return True
+
+        # If 7zip fails, fall back to the zipfile
+        logger.warning("7zip compression failed, falling back to zipfile")
+    except Exception as e:
+        logger.warning(f"Error using 7zip: {str(e)}. Falling back to zipfile.")
+
+    # Ensure the file extension is .zip for the fallback method
     if not zip_path.lower().endswith('.zip'):
         zip_path = os.path.splitext(zip_path)[0] + '.zip'
 
-    # Use Python's zipfile module
+    # Use Python's zipfile module as a fallback
     return _create_zip_with_zipfile(font_paths, zip_path)
 
 
@@ -845,61 +993,61 @@ def _verify_and_get_zip_size(zip_path: str) -> int:
 
 def create_zip_for_family(family_name: str, font_paths: List[str], output_dir: str) -> Tuple[str, int]:
     """
-    Create a zip file for a font family.
+    Create an archive file for a font family.
 
     Args:
         family_name: The name of the font family
         font_paths: List of paths to font files
-        output_dir: Directory to save the zip file
+        output_dir: Directory to save the archive file
 
     Returns:
-        Tuple of (zip_path, zip_size_in_bytes)
+        Tuple of (archive_path, archive_size_in_bytes)
     """
     try:
         # Ensure output directory exists
         os.makedirs(output_dir, exist_ok=True)
 
-        # Prepare the zip file path and get the sanitized name
-        zip_path, safe_name = _prepare_zip_path(family_name, output_dir)
+        # Prepare the archive file path and get the sanitized name
+        archive_path, safe_name = _prepare_zip_path(family_name, output_dir)
 
-        # Attempt to create the zip file with retries
-        success, final_zip_path = _attempt_zip_creation_with_retry(family_name, font_paths, zip_path
+        # Attempt to create the archive file with retries
+        success, final_archive_path = _attempt_zip_creation_with_retry(family_name, font_paths, archive_path
                                                                    )
 
         if not success:
-            raise Exception(f"Failed to create zip for {family_name} after multiple attempts")
+            raise Exception(f"Failed to create archive for {family_name} after multiple attempts")
 
-        # Verify the zip file exists and get its size
-        zip_size = _verify_and_get_zip_size(final_zip_path)
+        # Verify the archive file exists and get its size
+        archive_size = _verify_and_get_zip_size(final_archive_path)
 
-        return final_zip_path, zip_size
+        return final_archive_path, archive_size
 
     except Exception as e:
-        logger.error(f"Error creating zip for {family_name}: {str(e)}")
+        logger.error(f"Error creating archive for {family_name}: {str(e)}")
         # Return a fake path and size to avoid breaking the caller
-        return os.path.join(output_dir, f"{_sanitize_name(family_name)}.zip"), 0
+        return os.path.join(output_dir, f"{_sanitize_name(family_name)}.7z"), 0
 
 
 def create_zips(font_families: Dict[str, List[str]], output_dir: str) -> Tuple[List[str], int]:
     """
-    Create zip files for each font family using parallel processing.
+    Create archive files for each font family using parallel processing.
 
     Args:
         font_families: Dictionary mapping font family names to lists of font file paths
-        output_dir: Directory to save the zip files
+        output_dir: Directory to save the archive files
 
     Returns:
-        Tuple of (list_of_zip_paths, total_size_in_bytes)
+        Tuple of (list_of_archive_paths, total_size_in_bytes)
     """
-    logger.info("Creating zip files for font families...")
+    logger.info("Creating archive files for font families...")
 
     # Create an output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
-    # Using Python's built-in zipfile module
-    logger.info("Using built-in zip for compression")
+    # Using 7zip for compression with fallback to Python's built-in zipfile module
+    logger.info("Using 7zip for compression with LZMA2 method")
 
-    zip_paths = []
+    archive_paths = []
     total_size = 0
     total_families = len(font_families)
 
@@ -907,14 +1055,12 @@ def create_zips(font_families: Dict[str, List[str]], output_dir: str) -> Tuple[L
     families_list = list(font_families.items())
     logger.info(f"Processing all {total_families} font families")
 
-    # TODO: Incorporate Py7Zip
-
     # Use ThreadPoolExecutor for parallel compression
     with concurrent.futures.ThreadPoolExecutor() as executor:
         # Submit all compression tasks
         future_to_family = {}
         for family, paths in families_list:
-            logger.info(f"Starting zip task for {family}")
+            logger.info(f"Starting archive task for {family}")
             future = executor.submit(create_zip_for_family, family, paths, output_dir)
             future_to_family[future] = family
 
@@ -922,28 +1068,28 @@ def create_zips(font_families: Dict[str, List[str]], output_dir: str) -> Tuple[L
         for future in concurrent.futures.as_completed(future_to_family):
             family = future_to_family[future]
             try:
-                zip_path, zip_size = future.result()
-                zip_paths.append(zip_path)
-                total_size += zip_size
+                archive_path, archive_size = future.result()
+                archive_paths.append(archive_path)
+                total_size += archive_size
 
                 # Log task completion
-                logger.info(f"Finished zip task for {family}")
+                logger.info(f"Finished archive task for {family}")
 
                 # Log progress
-                completed = len(zip_paths)
+                completed = len(archive_paths)
                 progress = completed / total_families * 100
                 logger.info(
-                    f"Progress: {progress:.1f}% - Created zip for {family} ({zip_size / 1024 / 1024:.2f} MB)")
+                    f"Progress: {progress:.1f}% - Created archive for {family} ({archive_size / 1024 / 1024:.2f} MB)")
 
                 # Check if Ctrl+C was pressed
                 if exit_flag:
-                    logger.info("Exiting after completing current zip operation due to Ctrl+C")
-                    return zip_paths, total_size
+                    logger.info("Exiting after completing current archive operation due to Ctrl+C")
+                    return archive_paths, total_size
 
             except Exception as e:
-                logger.error(f"Error creating zip for {family}: {e}")
+                logger.error(f"Error creating archive for {family}: {e}")
 
-    return zip_paths, total_size
+    return archive_paths, total_size
 
 
 def create_git_repo(output_dir: str, total_families: int, total_size: int) -> None:
@@ -986,6 +1132,7 @@ All fonts were obtained from openly available locations.
     # Add .gitattributes file for Git LFS
     with open(os.path.join(repo_dir, ".gitattributes"), 'w') as f:
         f.write("*.zip filter=lfs diff=lfs merge=lfs -text\n")
+        f.write("*.7z filter=lfs diff=lfs merge=lfs -text\n")
 
     # Copy the .gitignore file to the repository if it exists
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1387,8 +1534,8 @@ def main():
     # Create an output directory
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Create zip files
-    zip_paths, total_size = create_zips(font_families, OUTPUT_DIR)
+    # Create archive files
+    archive_paths, total_size = create_zips(font_families, OUTPUT_DIR)
 
     # Calculate and display statistics
     total_fonts = sum(len(paths) for paths in font_families.values())
@@ -1396,11 +1543,11 @@ def main():
 
     logger.info(f"Total fonts: {total_fonts}")
     logger.info(f"Total font families: {total_families}")
-    logger.info(f"Total zip size: {total_size / 1024 / 1024:.2f} MB")
+    logger.info(f"Total archive size: {total_size / 1024 / 1024:.2f} MB")
 
     # Confirm with user
     print(f"\nFound {total_fonts} fonts in {total_families} families.")
-    print(f"Total zip size: {total_size / 1024 / 1024:.2f} MB")
+    print(f"Total archive size: {total_size / 1024 / 1024:.2f} MB")
     print("Do you want to proceed with creating the Git repository and uploading to GitHub? (y/n)")
 
     if input().lower() != 'y':
