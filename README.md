@@ -10,23 +10,26 @@ A Python script to scan, organize, and archive font files from Windows systems t
 - Creates zip archives for each font family
 - Uses Python's built-in zipfile module for compression
 - Creates a local Git repository
-- Uploads to GitHub with LFS support
+- Uploads to GitHub with LFS support (automatically uses LFS for files larger than 70MB)
 - Provides detailed logging and progress indicators
 
 ## Requirements
 
 - Python 3.x
-- Git with LFS support
+- Git with LFS support (install from https://git-lfs.github.com/)
 - GitHub personal access token (for repository creation)
 
 ## Installation
 
 1. Clone this repository
-2. Install dependencies using Poetry:
-
-```bash
-poetry install
-```
+2. Install Git LFS if you haven't already:
+   ```bash
+   git lfs install
+   ```
+3. Install dependencies using Poetry:
+   ```bash
+   poetry install
+   ```
 
 ## Usage
 
@@ -56,7 +59,7 @@ from that file. Otherwise, it will prompt you to enter your GitHub personal acce
 - A Git repository in the parent directory containing:
   - The contents of the Font-Storage directory (zip files)
   - README.md with statistics and disclaimer
-  - .gitattributes for LFS configuration
+  - .gitattributes for LFS configuration (tracks .zip, .7z, and any file >70MB)
   - .gitignore file
 - A GitHub repository named "Font-Storage" with the contents of the local Git repository
 - A log file named "font-upload.log"

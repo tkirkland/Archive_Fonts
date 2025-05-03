@@ -1108,7 +1108,7 @@ def create_zips(font_families: Dict[str, List[str]], output_dir: str) -> Tuple[L
 
 def create_git_repo(output_dir: str, total_families: int, total_size: int) -> None:
     """
-    Prepare files for the GitHub repository without using local Git commands.
+    Prepare files for the GitHub repository using Git and Git LFS.
 
     Args:
         output_dir: Directory for the repository
@@ -1143,10 +1143,45 @@ In the event that the contents of the repository fall under copyright, the repos
 All fonts were obtained from openly available locations.
 """)
 
-    # Add .gitattributes file for Git LFS
-    with open(os.path.join(repo_dir, ".gitattributes"), 'w') as f:
-        f.write("*.zip filter=lfs diff=lfs merge=lfs -text\n")
-        f.write("*.7z filter=lfs diff=lfs merge=lfs -text\n")
+    # Initialize a Git repository
+    try:
+        # Check if git is installed
+        subprocess.run(["git", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # Initialize a Git repository
+        subprocess.run(["git", "init"], check=True, cwd=repo_dir)
+        logger.info("Git repository initialized")
+
+        # Check if Git LFS is installed
+        try:
+            subprocess.run(["git", "lfs", "version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            logger.info("Git LFS is installed")
+        except subprocess.CalledProcessError:
+            logger.error("Git LFS is not installed. Please install Git LFS: https://git-lfs.github.com/")
+            print("\nGit LFS is not installed. Please install Git LFS: https://git-lfs.github.com/")
+            print("Continuing without Git LFS support...")
+            return
+
+        # Initialize Git LFS
+        subprocess.run(["git", "lfs", "install"], check=True, cwd=repo_dir)
+        logger.info("Git LFS initialized")
+
+        # Add .gitattributes file for Git LFS
+        with open(os.path.join(repo_dir, ".gitattributes"), 'w') as f:
+            # Track files larger than 70MB with Git LFS
+            f.write("*.zip filter=lfs diff=lfs merge=lfs -text\n")
+            f.write("*.7z filter=lfs diff=lfs merge=lfs -text\n")
+            # Add a size-based pattern for Git LFS
+            f.write("*.[!g][!i][!t]* filter=lfs diff=lfs merge=lfs -text size>=70M\n")
+
+        # Add .gitattributes to Git
+        subprocess.run(["git", "add", ".gitattributes"], check=True, cwd=repo_dir)
+        subprocess.run(["git", "commit", "-m", "Initialize Git LFS"], check=True, cwd=repo_dir)
+        logger.info("Git LFS configured to track files larger than 70MB")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error initializing Git or Git LFS: {e}")
+        print(f"\nError initializing Git or Git LFS: {e}")
+        print("Continuing without Git LFS support...")
 
     # Copy the .gitignore file to the repository if it exists
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1254,6 +1289,87 @@ def get_github_username(token: str) -> str:
 # These functions have been replaced by PyGithub implementations in create_github_repo
 
 
+def _check_if_repo_exists(user: Any, repo_name: str) -> Optional[Any]:
+    """
+    Check if a repository exists.
+
+    Args:
+        user: GitHub user object
+        repo_name: Name of the repository
+
+    Returns:
+        Repository object if it exists, None otherwise
+    """
+    try:
+        repo = user.get_repo(repo_name)
+        logger.info(f"Repository '{repo_name}' already exists")
+        return repo
+    except GithubException as e:
+        if e.status == 404:  # 404 means repo doesn't exist, which is fine
+            logger.info(f"Repository '{repo_name}' does not exist")
+            return None
+        # For other errors, re-raise to be handled by the caller
+        raise
+
+
+def _handle_existing_repo(repo: Any, repo_name: str) -> Tuple[bool, bool]:
+    """
+    Handle an existing repository by asking the user if they want to delete it.
+
+    Args:
+        repo: GitHub repository object
+        repo_name: Name of the repository
+
+    Returns:
+        Tuple of (success, should_append):
+        - success: True if the operation was successful, False if there was an error
+        - should_append: True if the user wants to append to existing repo, False if deleted or error
+    """
+    print(f"\nRepository '{repo_name}' already exists.")
+    print("Do you want to delete it and start fresh? (y/n)")
+
+    if input().lower() != 'y':
+        logger.info("Will append to existing repository")
+        return True, True  # Success should append
+
+    try:
+        repo.delete()
+        logger.info(f"Deleted repository '{repo_name}'")
+        # Wait a moment for the deletion to complete
+        time.sleep(2)
+        return True, False  # Success should not append (create new)
+    except GithubException as e:
+        logger.error(f"Failed to delete repository: {e}")
+        return False, False  # Error should not append
+
+
+def _create_new_repo(user: Any, repo_name: str) -> bool:
+    """
+    Create a new GitHub repository.
+
+    Args:
+        user: GitHub user object
+        repo_name: Name of the repository
+
+    Returns:
+        True if the repository was created successfully, False otherwise
+    """
+    try:
+        user.create_repo(
+            name=repo_name,
+            description="Collection of fonts organized by family",
+            private=False,
+            has_issues=True,
+            has_projects=False,
+            has_wiki=False
+        )
+        logger.info(f"Created GitHub repository '{repo_name}'")
+        return True
+    except GithubException as e:
+        logger.error(f"Failed to create repository: {e}")
+        return False
+
+
 def create_github_repo(token: str, repo_name: str) -> None:
     """
     Create a GitHub repository using PyGithub.
@@ -1268,44 +1384,77 @@ def create_github_repo(token: str, repo_name: str) -> None:
         user = g.get_user()
 
         # Check if repo exists
-        try:
-            repo = user.get_repo(repo_name)
-            print(f"\nRepository '{repo_name}' already exists.")
-            print("Do you want to delete it and start fresh? (y/n)")
-            if input().lower() == 'y':
-                try:
-                    repo.delete()
-                    logger.info(f"Deleted repository '{repo_name}'")
-                    # Wait a moment for the deletion to complete
-                    time.sleep(2)
-                except GithubException as e:
-                    logger.error(f"Failed to delete repository: {e}")
-                    sys.exit(1)
-            else:
-                logger.info("Will append to existing repository")
-                return
-        except GithubException as e:
-            if e.status != 404:  # 404 means repo doesn't exist, which is fine
-                logger.error(f"Error checking if repository exists: {e}")
+        repo = _check_if_repo_exists(user, repo_name)
+
+        if repo:
+            # Handle existing repository
+            success, should_append = _handle_existing_repo(repo, repo_name)
+
+            if not success:
+                logger.error("Failed to handle existing repository")
                 sys.exit(1)
 
+            # If a user chose to append to an existing repo, we're done
+            if should_append:
+                return
+
         # Create a new repo
-        try:
-            user.create_repo(
-                name=repo_name,
-                description="Collection of fonts organized by family",
-                private=False,
-                has_issues=True,
-                has_projects=False,
-                has_wiki=False
-            )
-            logger.info(f"Created GitHub repository '{repo_name}'")
-        except GithubException as e:
-            logger.error(f"Failed to create repository: {e}")
+        if not _create_new_repo(user, repo_name):
+            logger.error("Failed to create new repository")
             sys.exit(1)
+
+    except GithubException as e:
+        logger.error(f"GitHub API error: {e}")
+        sys.exit(1)
     except Exception as e:
         logger.error(f"Error in create_github_repo: {e}")
         sys.exit(1)
+
+
+def _get_github_user_plan(token: str) -> Tuple[bool, str]:
+    """
+    Get the GitHub user's plan information.
+
+    Args:
+        token: GitHub personal access token
+
+    Returns:
+        Tuple of (success, plan_name)
+    """
+    try:
+        g = Github(token)
+        user = g.get_user()
+
+        # Get plan information
+        plan_name = user.plan.name if hasattr(user, 'plan') and hasattr(user.plan, 'name') else "unknown"
+        logger.info(f"Retrieved GitHub account plan: {plan_name}")
+        return True, plan_name
+    except GithubException as e:
+        logger.error(f"Error getting GitHub user plan: {e}")
+        return False, "unknown"
+
+
+def _prompt_user_for_confirmation(message: str, warning: str) -> bool:
+    """
+    Prompt the user for confirmation with a warning message.
+
+    Args:
+        message: The message to display to the user
+        warning: The warning to log and display
+
+    Returns:
+        True if the user confirms, False otherwise
+    """
+    logger.warning(warning)
+
+    print(f"\n{message}")
+    print("Do you want to continue? (y/n)")
+
+    if input().lower() != 'y':
+        logger.info("User chose not to proceed")
+        return False
+
+    return True
 
 
 def check_github_lfs_storage(token: str) -> bool:
@@ -1318,32 +1467,41 @@ def check_github_lfs_storage(token: str) -> bool:
     Returns:
         True if there is enough storage, False otherwise
     """
+    # Get user plan information
+    success, plan_name = _get_github_user_plan(token)
+    if not success:
+        return False
+
+    logger.info(f"Checking GitHub LFS storage limits... (Account plan: {plan_name})")
+
+    # For demonstration purposes, we'll check if the account plan allows LFS
+    # Free accounts have limited LFS storage
+    if plan_name.lower() == "free":
+        message = "You are using a free GitHub account with limited LFS storage.\nLarge uploads may fail if you exceed your storage quota."
+        warning = "You are using a free GitHub account with limited LFS storage. Large uploads may fail if you exceed your storage quota."
+
+        return _prompt_user_for_confirmation(message, warning)
+
+    return True
+
+
+def _check_github_api_rate_limit(token: str) -> bool:
+    """
+    Check the GitHub API rate limit.
+
+    Args:
+        token: GitHub personal access token
+
+    Returns:
+        True if successful, False otherwise
+    """
     try:
         g = Github(token)
-        user = g.get_user()
-
-        # Get plan information
-        plan_name = user.plan.name if hasattr(user, 'plan') and hasattr(user.plan, 'name') else "unknown"
-        logger.info(f"Checking GitHub LFS storage limits... (Account plan: {plan_name})")
-
-        # For demonstration purposes, we'll check if the account plan allows LFS
-        # Free accounts have limited LFS storage
-        if plan_name.lower() == "free":
-            logger.warning("You are using a free GitHub account with limited LFS storage.")
-            logger.warning("Large uploads may fail if you exceed your storage quota.")
-
-            # Ask a user if they want to continue
-            print("\nYou are using a free GitHub account with limited LFS storage.")
-            print("Large uploads may fail if you exceed your storage quota.")
-            print("Do you want to continue? (y/n)")
-
-            if input().lower() != 'y':
-                logger.info("User chose not to proceed due to LFS storage concerns")
-                return False
-
+        rate_limit = g.get_rate_limit()
+        logger.info(f"GitHub API rate limit: {rate_limit.core.remaining}/{rate_limit.core.limit}")
         return True
     except GithubException as e:
-        logger.error(f"Error checking GitHub LFS storage: {e}")
+        logger.error(f"Error checking GitHub API rate limit: {e}")
         return False
 
 
@@ -1358,35 +1516,22 @@ def check_github_data_limits(token: str, total_size: int) -> bool:
     Returns:
         True if there is enough quota, False otherwise
     """
-    try:
-        g = Github(token)
-
-        # Get rate limit information
-        rate_limit = g.get_rate_limit()
-        logger.info(f"GitHub API rate limit: {rate_limit.core.remaining}/{rate_limit.core.limit}")
-
-        logger.info(f"Checking GitHub data transfer limits... (Upload size: {total_size / 1024 / 1024:.2f} MB)")
-
-        # For demonstration purposes, we'll check if the size is reasonable
-        size_mb = total_size / 1024 / 1024
-
-        if size_mb > 1000:  # 1 GB
-            logger.warning(f"Upload size is large: {size_mb:.2f} MB")
-            logger.warning("GitHub has monthly data transfer limits that may affect your upload.")
-
-            # Ask a user if they want to continue
-            print(f"\nUpload size is large: {size_mb:.2f} MB")
-            print("GitHub has monthly data transfer limits that may affect your upload.")
-            print("Do you want to continue? (y/n)")
-
-            if input().lower() != 'y':
-                logger.info("User chose not to proceed due to data transfer concerns")
-                return False
-
-        return True
-    except GithubException as e:
-        logger.error(f"Error checking GitHub data limits: {e}")
+    # Check API rate limit
+    if not _check_github_api_rate_limit(token):
         return False
+
+    # Calculate size in MB
+    size_mb = total_size / 1024 / 1024
+    logger.info(f"Checking GitHub data transfer limits... (Upload size: {size_mb:.2f} MB)")
+
+    # For demonstration purposes, we'll check if the size is reasonable
+    if size_mb > 1000:  # 1 GB
+        message = f"Upload size is large: {size_mb:.2f} MB\nGitHub has monthly data transfer limits that may affect your upload."
+        warning = f"Upload size is large: {size_mb:.2f} MB. GitHub has monthly data transfer limits that may affect your upload."
+
+        return _prompt_user_for_confirmation(message, warning)
+
+    return True
 
 
 def _is_file_too_large(file_path: str) -> bool:
@@ -1397,10 +1542,10 @@ def _is_file_too_large(file_path: str) -> bool:
         file_path: Path to the file
 
     Returns:
-        True if the file is too large (>100MB), False otherwise
+        True if the file is too large (>70MB), False otherwise
     """
-    # GitHub recommends using Git LFS for files larger than 100MB
-    return os.path.getsize(file_path) > 100 * 1024 * 1024  # 100MB
+    # Use Git LFS for files larger than 70MB as per requirements
+    return os.path.getsize(file_path) > 70 * 1024 * 1024  # 70MB
 
 
 def _read_file_content(file_path: str) -> bytes:
@@ -1472,14 +1617,30 @@ def _process_file(repo, repo_dir: str, file_path: str) -> None:
     # Get the relative path to use as the file path in the repo
     rel_path = os.path.relpath(file_path, repo_dir)
 
-    # Skip files that are too large for direct API upload
+    # Check if the file is too large for direct API upload
     if _is_file_too_large(file_path):
-        logger.warning(f"File {rel_path} is too large for direct API upload. "
-                      f"Please use Git LFS for this file.")
-        return
-
-    # Upload the file to GitHub
-    _upload_file_to_github(repo, file_path, rel_path)
+        logger.info(f"File {rel_path} is larger than 70MB. Using Git LFS for this file.")
+        try:
+            # Add the file to Git
+            subprocess.run(["git", "add", rel_path], check=True, cwd=repo_dir)
+            logger.info(f"Added large file {rel_path} to Git (will be handled by LFS)")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error adding large file {rel_path} to Git: {e}")
+            # Fall back to direct API upload with a warning
+            logger.warning(f"Falling back to direct API upload for {rel_path}. This may fail if the file is too large.")
+            _upload_file_to_github(repo, file_path, rel_path)
+    else:
+        # For smaller files, we can use either Git or direct API upload
+        # Using Git for consistency
+        try:
+            # Add the file to Git
+            subprocess.run(["git", "add", rel_path], check=True, cwd=repo_dir)
+            logger.info(f"Added file {rel_path} to Git")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Error adding file {rel_path} to Git: {e}")
+            # Fall back to direct API upload
+            logger.warning(f"Falling back to direct API upload for {rel_path}")
+            _upload_file_to_github(repo, file_path, rel_path)
 
 
 def _process_directory(repo, repo_dir: str, directory: str) -> None:
@@ -1503,32 +1664,278 @@ def _process_directory(repo, repo_dir: str, directory: str) -> None:
             _process_file(repo, repo_dir, file_path)
 
 
+def _connect_to_github(token: str, repo_name: str) -> Tuple[Any, str, str]:
+    """
+    Connect to GitHub and get repository information.
+
+    Args:
+        token: GitHub personal access token
+        repo_name: Name of the repository
+
+    Returns:
+        Tuple of (repository_object, repository_directory, username)
+    """
+    # Create a GitHub instance with the token
+    g = Github(token)
+
+    # Get the repository
+    repo = g.get_user().get_repo(repo_name)
+    logger.info(f"Connected to GitHub repository '{repo_name}'")
+
+    # Get the current directory (where the local repo is)
+    repo_dir = os.getcwd()
+
+    # Get the GitHub username
+    username = get_github_username(token)
+    if not username:
+        raise ValueError("Failed to get GitHub username")
+
+    return repo, repo_dir, username
+
+
+def _process_repository_files(repo: Any, repo_dir: str) -> None:
+    """
+    Process all files in the repository directory.
+
+    Args:
+        repo: GitHub repository object
+        repo_dir: Local repository directory
+    """
+    _process_directory(repo, repo_dir, repo_dir)
+
+
+def _configure_git_user(username: str, repo_dir: str) -> None:
+    """
+    Configure Git user information.
+
+    Args:
+        username: GitHub username
+        repo_dir: Local repository directory
+    """
+    # Configure a Git user if not already configured
+    subprocess.run(
+        ["git", "config", "user.email", f"{username}@users.noreply.github.com"],
+        check=False,
+        cwd=repo_dir
+    )
+    subprocess.run(
+        ["git", "config", "user.name", username],
+        check=False,
+        cwd=repo_dir
+    )
+    logger.info("Configured Git user")
+
+
+def _commit_changes(repo_dir: str) -> bool:
+    """
+    Commit changes to the local repository.
+
+    Args:
+        repo_dir: Local repository directory
+
+    Returns:
+        True if changes were committed, False if no changes to commit
+    """
+    # Check if there are changes to commit
+    status_result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=repo_dir
+    )
+
+    if not status_result.stdout.strip():
+        logger.info("No changes to commit")
+        return False
+
+    # Try to commit changes
+    try:
+        subprocess.run(
+            ["git", "commit", "-m", "Upload font archives"],
+            check=True,
+            cwd=repo_dir
+        )
+        logger.info("Committed changes to local repository")
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Git commit failed: {e}")
+
+        # Try with a --allow-empty flag as a fallback
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "Upload font archives"],
+            check=True,
+            cwd=repo_dir
+        )
+        logger.info("Committed changes to local repository (with --allow-empty)")
+        return True
+
+
+def _setup_git_remote(username: str, token: str, repo_name: str, repo_dir: str) -> None:
+    """
+    Set up Git remote for the repository.
+
+    Args:
+        username: GitHub username
+        token: GitHub personal access token
+        repo_name: Name of the repository
+        repo_dir: Local repository directory
+    """
+    # First, check if the remote already exists
+    try:
+        subprocess.run(
+            ["git", "remote", "remove", "origin"],
+            check=False,  # Don't fail if remote doesn't exist
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=repo_dir
+        )
+    except subprocess.SubprocessError:
+        pass  # Ignore errors when removing a remote
+
+    remote_url = f"https://{username}:{token}@github.com/{username}/{repo_name}.git"
+    subprocess.run(
+        ["git", "remote", "add", "origin", remote_url],
+        check=True,
+        cwd=repo_dir
+    )
+    logger.info("Added GitHub repository as remote")
+
+
+def _get_or_create_branch(repo_dir: str) -> str:
+    """
+    Get the current branch name or create a new branch.
+
+    Args:
+        repo_dir: Local repository directory
+
+    Returns:
+        Name of the current branch
+    """
+    # Get the current branch name
+    branch_result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=repo_dir
+    )
+
+    current_branch = branch_result.stdout.strip()
+    if current_branch:
+        return current_branch
+
+    # Default to 'main' if the branch name can't be determined
+    for branch_name in ["main", "master"]:
+        try:
+            subprocess.run(
+                ["git", "checkout", "-b", branch_name],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=repo_dir
+            )
+            logger.info(f"Created and checked out branch: {branch_name}")
+            return branch_name
+        except subprocess.CalledProcessError:
+            logger.warning(f"Failed to create branch: {branch_name}")
+            continue
+
+    # If we get here, we couldn't create either branch
+    raise RuntimeError("Failed to determine or create a Git branch")
+
+
+def _push_to_github_with_lfs(repo_name: str, current_branch: str, repo_dir: str) -> bool:
+    """
+    Push to GitHub with Git LFS.
+
+    Args:
+        repo_name: Name of the repository
+        current_branch: Name of the current branch
+        repo_dir: Local repository directory
+
+    Returns:
+        True if the push was successful, False otherwise
+    """
+    logger.info(f"Pushing to branch: {current_branch}")
+
+    # Try a normal push first
+    try:
+        subprocess.run(
+            ["git", "push", "-u", "origin", current_branch],
+            check=True,
+            cwd=repo_dir
+        )
+        logger.info(f"Pushed to GitHub repository '{repo_name}' with Git LFS")
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Git push failed: {e}")
+
+        # Try force push as a last resort
+        try:
+            logger.warning("Attempting force push...")
+            subprocess.run(
+                ["git", "push", "-u", "-f", "origin", current_branch],
+                check=True,
+                cwd=repo_dir
+            )
+            logger.info(f"Force pushed to GitHub repository '{repo_name}' with Git LFS")
+            return True
+        except subprocess.CalledProcessError as push_e:
+            logger.error(f"Git force push failed: {push_e}")
+            return False
+
+
 def push_to_github(token: str, repo_name: str) -> None:
     """
-    Push the local repository to GitHub using PyGithub.
+    Push the local repository to GitHub using Git commands and PyGithub.
+    Uses Git LFS for files larger than 70MB.
 
     Args:
         token: GitHub personal access token
         repo_name: Name of the repository
     """
     try:
-        # Create a GitHub instance with the token
-        g = Github(token)
-
-        # Get the repository
-        repo = g.get_user().get_repo(repo_name)
-        logger.info(f"Connected to GitHub repository '{repo_name}'")
-
-        # Get the current directory (where the local repo is)
-        repo_dir = os.getcwd()
+        # Connect to GitHub and get repository information
+        repo, repo_dir, username = _connect_to_github(token, repo_name)
 
         # Process all files in the repository directory
-        _process_directory(repo, repo_dir, repo_dir)
+        _process_repository_files(repo, repo_dir)
 
-        logger.info(f"Pushed to GitHub repository '{repo_name}'")
+        try:
+            # Configure Git user
+            _configure_git_user(username, repo_dir)
+
+            # Commit changes
+            _commit_changes(repo_dir)
+
+            # Set up Git remote
+            _setup_git_remote(username, token, repo_name, repo_dir)
+
+            # Get or create a branch
+            current_branch = _get_or_create_branch(repo_dir)
+
+            # Push to GitHub with LFS
+            if not _push_to_github_with_lfs(repo_name, current_branch, repo_dir):
+                # Fall back to direct API upload if push fails
+                logger.warning("Falling back to direct API upload")
+                _process_repository_files(repo, repo_dir)
+                logger.info(f"Pushed to GitHub repository '{repo_name}' using API")
+
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Git command failed: {e}")
+            logger.warning("Falling back to direct API upload for remaining files")
+
+            # Fall back to direct API upload for any remaining files
+            _process_repository_files(repo, repo_dir)
+            logger.info(f"Pushed to GitHub repository '{repo_name}' using API")
+
     except GithubException as e:
         logger.error(f"GitHub API error: {e}")
-        sys.exit(1)
+    except ValueError as e:
+        logger.error(str(e))
     except Exception as e:
         logger.error(f"Error in push_to_github: {e}")
         sys.exit(1)
