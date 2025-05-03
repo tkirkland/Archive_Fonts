@@ -75,6 +75,50 @@ logger.setLevel(logging.INFO)
 logger.propagate = False
 
 
+# Function to sanitize paths for logging
+def _sanitize_path(path: str) -> str:
+    """
+    Sanitize a path for logging by replacing sensitive parts with placeholders.
+
+    Args:
+        path: The path to sanitize
+
+    Returns:
+        Sanitized path
+    """
+    if not path:
+        return path
+
+    # Replace user home directory with placeholder
+    home_dir = os.path.expanduser("~")
+    if home_dir in path:
+        path = path.replace(home_dir, "<HOME>")
+
+    # Replace Windows user profile directory with placeholder
+    if "Users" in path and "\\" in path:
+        parts = path.split("\\")
+        for i, part in enumerate(parts):
+            if part == "Users" and i + 1 < len(parts):
+                # Replace the username after "Users" with a placeholder
+                parts[i + 1] = "<USER>"
+                path = "\\".join(parts)
+                break
+
+    # Replace common sensitive directories
+    replacements = {
+        os.environ.get("LOCALAPPDATA", ""): "<LOCALAPPDATA>",
+        os.environ.get("APPDATA", ""): "<APPDATA>",
+        os.environ.get("TEMP", ""): "<TEMP>",
+        os.environ.get("TMP", ""): "<TMP>",
+        tempfile.gettempdir(): "<TEMPDIR>"
+    }
+
+    for original, replacement in replacements.items():
+        if original and original in path:
+            path = path.replace(original, replacement)
+
+    return path
+
 # Function to get a temporary directory
 def get_temp_dir():
     """
@@ -92,7 +136,7 @@ def get_temp_dir():
     temp_dir = os.path.join(base_temp_dir, f"run_{timestamp}")
     os.makedirs(temp_dir, exist_ok=True)
 
-    logger.info(f"Using temporary directory: {temp_dir}")
+    logger.info(f"Using temporary directory: {_sanitize_path(temp_dir)}")
     return temp_dir
 
 
@@ -110,7 +154,8 @@ file_handler = logging.FileHandler(log_file_path)
 file_formatter = NoMicrosecondsFormatter('%(asctime)s - %(levelname)s - %(message)s')
 file_handler.setFormatter(file_formatter)
 logger.addHandler(file_handler)
-logger.info(f"Log file created at: {log_file_path}")
+start_time = datetime.datetime.now()
+logger.info(f"Script started at: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # Global flag to track if Ctrl+C was pressed
 exit_flag = False
@@ -126,17 +171,17 @@ def delete_temp_directory(ask_confirmation=True):
     """
     try:
         if ask_confirmation:
-            print(f"\nDo you want to delete the temporary directory? ({TEMP_DIR}) (y/n)")
+            print(f"\nDo you want to delete the temporary directory? ({_sanitize_path(TEMP_DIR)}) (y/n)")
             if input().lower() == 'y':
-                logger.info(f"Deleting temporary directory: {TEMP_DIR}")
+                logger.info(f"Deleting temporary directory: {_sanitize_path(TEMP_DIR)}")
                 shutil.rmtree(TEMP_DIR, ignore_errors=True)
-                print(f"Temporary directory deleted: {TEMP_DIR}")
+                print(f"Temporary directory deleted: {_sanitize_path(TEMP_DIR)}")
             else:
                 logger.info("User chose not to delete the temporary directory")
-                print(f"Temporary directory preserved: {TEMP_DIR}")
+                print(f"Temporary directory preserved: {_sanitize_path(TEMP_DIR)}")
         else:
             # Delete it without asking
-            logger.info(f"Deleting temporary directory without confirmation: {TEMP_DIR}")
+            logger.info(f"Deleting temporary directory without confirmation: {_sanitize_path(TEMP_DIR)}")
             shutil.rmtree(TEMP_DIR, ignore_errors=True)
     except Exception as e:
         logger.error(f"Error while trying to delete temporary directory: {e}")
@@ -233,7 +278,7 @@ def get_font_family(font_path: str) -> Optional[str]:
         return _clean_font_filename(font_path)
 
     except Exception as e:
-        logger.warning(f"Could not extract family name from {font_path}: {e}")
+        logger.warning(f"Could not extract family name from {_sanitize_path(font_path)}: {e}")
         # Use filename as a fallback
         return _clean_font_filename(font_path)
 
@@ -279,7 +324,7 @@ def _scan_directory(directory: str, font_families: Dict[str, List[str]],
     if not os.path.exists(directory):
         return processed_fonts
 
-    logger.info(f"Scanning fonts directory: {directory}")
+    logger.info(f"Scanning fonts directory: {_sanitize_path(directory)}")
 
     for ext in ['*.ttf', '*.otf']:
         for font_path in glob.glob(os.path.join(directory, ext)):
@@ -312,12 +357,12 @@ def scan_fonts() -> Dict[str, List[str]]:
 
     # Scan user fonts first (preferred over system fonts)
     if os.path.exists(LOCAL_FONTS_DIR):
-        logger.info(f"Scanning user fonts directory: {LOCAL_FONTS_DIR}")
+        logger.info(f"Scanning user fonts directory: {_sanitize_path(LOCAL_FONTS_DIR)}")
         process_fonts_directory(LOCAL_FONTS_DIR, font_families, processed_fonts, add_to_processed=True)
 
     # Then scan system fonts
     if os.path.exists(WINDOWS_FONTS_DIR):
-        logger.info(f"Scanning system fonts directory: {WINDOWS_FONTS_DIR}")
+        logger.info(f"Scanning system fonts directory: {_sanitize_path(WINDOWS_FONTS_DIR)}")
         process_fonts_directory(WINDOWS_FONTS_DIR, font_families, processed_fonts, add_to_processed=False)
 
     # Remove any families with no fonts (shouldn't happen, but just in case)
@@ -437,13 +482,13 @@ def _cleanup_temp_directory(temp_dir: str) -> None:
     if not os.path.exists(temp_dir):
         return
 
-    logger.debug(f"Removing directory: {temp_dir}")
+    logger.debug(f"Removing directory: {_sanitize_path(temp_dir)}")
 
     # Use shutil.rmtree with ignore_errors=True for simplicity
     try:
         shutil.rmtree(temp_dir, ignore_errors=True)
     except Exception as e:
-        logger.warning(f"Failed to remove directory {temp_dir}: {e}")
+        logger.warning(f"Failed to remove directory {_sanitize_path(temp_dir)}: {e}")
 
 
 def _verify_temp_directory(temp_dir: str, family_name: str) -> bool:
@@ -458,7 +503,7 @@ def _verify_temp_directory(temp_dir: str, family_name: str) -> bool:
         True if the directory exists, False otherwise
     """
     if not os.path.exists(temp_dir):
-        logger.error(f"Temporary directory {temp_dir} does not exist for {family_name}")
+        logger.error(f"Temporary directory {_sanitize_path(temp_dir)} does not exist for {family_name}")
         return False
     return True
 
@@ -478,7 +523,7 @@ def _change_to_directory(directory: str, family_name: str) -> bool:
         os.chdir(directory)
         return True
     except Exception as e:
-        logger.error(f"Error changing to directory {directory} for {family_name}: {str(e)}")
+        logger.error(f"Error changing to directory {_sanitize_path(directory)} for {family_name}: {str(e)}")
         return False
 
 
@@ -516,7 +561,7 @@ def _handle_existing_zip(zip_path: str) -> str:
             os.remove(zip_path)
             return zip_path
         except Exception as e:
-            logger.warning(f"Could not remove existing archive file {zip_path}: {e}")
+            logger.warning(f"Could not remove existing archive file {_sanitize_path(zip_path)}: {e}")
             # If we can't remove it, use a different name
             # Preserve the original file extension (.zip or .7z)
             file_ext = os.path.splitext(zip_path)[1]
@@ -560,7 +605,7 @@ def _verify_font_paths(font_paths: List[str], zip_path: str) -> bool:
     """
     missing_fonts = [path for path in font_paths if not os.path.exists(path)]
     if missing_fonts:
-        logger.error(f"Missing font files for {zip_path}: {missing_fonts}")
+        logger.error(f"Missing font files for {_sanitize_path(zip_path)}: {missing_fonts}")
         return False
     return True
 
@@ -582,17 +627,17 @@ def _create_zip_file(font_paths: List[str], zip_path: str) -> bool:
                 try:
                     zipf.write(font_path, os.path.basename(font_path))
                 except Exception as e:
-                    logger.error(f"Error adding {font_path} to zip: {str(e)}")
+                    logger.error(f"Error adding {_sanitize_path(font_path)} to zip: {str(e)}")
                     # Continue with other files
         return True
     except zipfile.BadZipFile as e:
-        logger.error(f"Bad zip file error for {zip_path}: {str(e)}")
+        logger.error(f"Bad zip file error for {_sanitize_path(zip_path)}: {str(e)}")
         return False
     except PermissionError as e:
-        logger.error(f"Permission error creating zip file {zip_path}: {str(e)}")
+        logger.error(f"Permission error creating zip file {_sanitize_path(zip_path)}: {str(e)}")
         return False
     except Exception as e:
-        logger.error(f"Error creating zip file {zip_path}: {str(e)}")
+        logger.error(f"Error creating zip file {_sanitize_path(zip_path)}: {str(e)}")
         return False
 
 
@@ -608,7 +653,7 @@ def _verify_zip_file(zip_path: str) -> bool:
     """
     # Verify the zip file was created
     if not os.path.exists(zip_path):
-        logger.error(f"Zip file {zip_path} was not created")
+        logger.error(f"Zip file {_sanitize_path(zip_path)} was not created")
         return False
 
     # Verify the zip file is valid
@@ -616,11 +661,11 @@ def _verify_zip_file(zip_path: str) -> bool:
         with zipfile.ZipFile(zip_path, 'r') as zipf:
             # Test the integrity of the zip file
             if zipf.testzip() is not None:
-                logger.error(f"Zip file {zip_path} is corrupted")
+                logger.error(f"Zip file {_sanitize_path(zip_path)} is corrupted")
                 return False
         return True
     except Exception as e:
-        logger.error(f"Error verifying zip file {zip_path}: {str(e)}")
+        logger.error(f"Error verifying zip file {_sanitize_path(zip_path)}: {str(e)}")
         return False
 
 
@@ -636,7 +681,7 @@ def _verify_7z_file(zip_path: str) -> bool:
     """
     # Verify the 7z file was created
     if not os.path.exists(zip_path):
-        logger.error(f"7z file {zip_path} was not created")
+        logger.error(f"7z file {_sanitize_path(zip_path)} was not created")
         return False
 
     # Verify the 7z file is valid using the 7z command-line tool
@@ -652,7 +697,7 @@ def _verify_7z_file(zip_path: str) -> bool:
 
         # Check if the test was successful
         if process.returncode != 0:
-            logger.error(f"7z file {zip_path} is corrupted: {process.stderr}")
+            logger.error(f"7z file {_sanitize_path(zip_path)} is corrupted: {process.stderr}")
             return False
 
         return True
@@ -660,7 +705,7 @@ def _verify_7z_file(zip_path: str) -> bool:
         logger.error("7zip command-line tool (7z) not found. Cannot verify 7z file.")
         return False
     except Exception as e:
-        logger.error(f"Error verifying 7z file {zip_path}: {str(e)}")
+        logger.error(f"Error verifying 7z file {_sanitize_path(zip_path)}: {str(e)}")
         return False
 
 
@@ -801,7 +846,7 @@ def _get_zip_size(zip_path: str) -> int:
     try:
         return os.path.getsize(zip_path)
     except Exception as e:
-        logger.error(f"Error getting size of archive file {zip_path}: {str(e)}")
+        logger.error(f"Error getting size of archive file {_sanitize_path(zip_path)}: {str(e)}")
         return 0
 
 
@@ -824,8 +869,20 @@ def _display_progress_bar(progress: float, width: int = 50, prefix: str = '', su
     # Create the progress bar
     bar = '█' * filled_length + '-' * (width - filled_length)
 
-    # Print the progress bar
-    print(f'\r{prefix} |{bar}| {progress:.1f}% {suffix}', end='', flush=True)
+    # Store the previous suffix length in a function attribute
+    # This allows us to track it between calls
+    if not hasattr(_display_progress_bar, 'prev_suffix_len'):
+        _display_progress_bar.prev_suffix_len = 0
+
+    # Calculate how many spaces we need to clear the previous suffix
+    # We only want to clear the suffix text, not the entire line
+    clear_suffix = ' ' * max(0, _display_progress_bar.prev_suffix_len - len(suffix))
+
+    # Update the previous suffix length for the next call
+    _display_progress_bar.prev_suffix_len = len(suffix)
+
+    # Print the progress bar with clearing spaces for the suffix only
+    print(f'\r{prefix} |{bar}| {progress:.1f}% {suffix}{clear_suffix}', end='', flush=True)
 
     # Print a newline when progress is complete
     if progress == 100:
@@ -922,14 +979,15 @@ def _create_zip_with_7zip(font_paths: List[str], zip_path: str) -> bool:
         if not _verify_7z_file(zip_path):
             return False
 
-        logger.info(f"Successfully created 7z archive {zip_path} with compression level {compression_level}")
+        logger.info(
+            f"Successfully created 7z archive {_sanitize_path(zip_path)} with compression level {compression_level}")
         return True
 
     except FileNotFoundError:
         logger.error("7zip command-line tool (7z) not found. Please install 7zip and ensure it's in your PATH.")
         return False
     except Exception as e:
-        logger.error(f"Error creating 7z archive {zip_path}: {str(e)}")
+        logger.error(f"Error creating 7z archive {_sanitize_path(zip_path)}: {str(e)}")
         return False
 
 
@@ -1131,22 +1189,15 @@ def create_zips(font_families: Dict[str, List[str]], output_dir: str) -> Tuple[L
     return archive_paths, total_size
 
 
-def create_git_repo(output_dir: str, total_families: int, total_size: int) -> None:
+def _create_readme_file(repo_dir: str, total_families: int, total_size: int) -> None:
     """
-    Prepare files for the GitHub repository using Git and Git LFS.
+    Create README.md with statistics and a disclaimer.
 
     Args:
-        output_dir: Directory for the repository
+        repo_dir: Directory for the repository
         total_families: Number of font families
         total_size: Total size of all zip files in bytes
     """
-    logger.info("Preparing files for GitHub repository...")
-
-    # Create a parent directory for the repository
-    repo_dir = os.path.dirname(output_dir)
-    os.chdir(repo_dir)
-
-    # Create README.md with a disclaimer
     readme_path = os.path.join(repo_dir, "README.md")
     with open(readme_path, 'w') as f:
         f.write(f"""# Font Storage
@@ -1167,8 +1218,19 @@ These fonts are provided "as is" without warranty of any kind, either expressed 
 In the event that the contents of the repository fall under copyright, the repository owner makes no claim to its contents. 
 All fonts were obtained from openly available locations.
 """)
+    logger.info("Created README.md with statistics and disclaimer")
 
-    # Initialize a Git repository
+
+def _initialize_git_and_lfs(repo_dir: str) -> bool:
+    """
+    Initialize Git and Git LFS in the repository directory.
+
+    Args:
+        repo_dir: Directory for the repository
+
+    Returns:
+        True if Git and Git LFS were initialized successfully, False otherwise
+    """
     try:
         # Check if git is installed
         subprocess.run(["git", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1185,12 +1247,30 @@ All fonts were obtained from openly available locations.
             logger.error("Git LFS is not installed. Please install Git LFS: https://git-lfs.github.com/")
             print("\nGit LFS is not installed. Please install Git LFS: https://git-lfs.github.com/")
             print("Continuing without Git LFS support...")
-            return
+            return False
 
         # Initialize Git LFS
         subprocess.run(["git", "lfs", "install"], check=True, cwd=repo_dir)
         logger.info("Git LFS initialized")
+        return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Error initializing Git or Git LFS: {e}")
+        print(f"\nError initializing Git or Git LFS: {e}")
+        print("Continuing without Git LFS support...")
+        return False
 
+
+def _configure_git_lfs(repo_dir: str) -> bool:
+    """
+    Configure Git LFS by creating and committing a .gitattributes file.
+
+    Args:
+        repo_dir: Directory for the repository
+
+    Returns:
+        True if Git LFS was configured successfully, False otherwise
+    """
+    try:
         # Add .gitattributes file for Git LFS
         with open(os.path.join(repo_dir, ".gitattributes"), 'w') as f:
             # Track specific file types with Git LFS
@@ -1203,18 +1283,90 @@ All fonts were obtained from openly available locations.
         subprocess.run(["git", "add", ".gitattributes"], check=True, cwd=repo_dir)
         subprocess.run(["git", "commit", "-m", "Initialize Git LFS"], check=True, cwd=repo_dir)
         logger.info("Git LFS configured to track zip, 7z, and other binary files")
+        return True
     except subprocess.CalledProcessError as e:
-        logger.error(f"Error initializing Git or Git LFS: {e}")
-        print(f"\nError initializing Git or Git LFS: {e}")
-        print("Continuing without Git LFS support...")
+        logger.error(f"Error configuring Git LFS: {e}")
+        return False
 
-    # Copy the .gitignore file to the repository if it exists
+
+def _copy_gitignore_file(repo_dir: str) -> None:
+    """
+    Copy the .gitignore file to the repository if it exists.
+
+    Args:
+        repo_dir: Directory for the repository
+    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     gitignore_path = os.path.join(script_dir, ".gitignore")
     if os.path.exists(gitignore_path):
         shutil.copy2(gitignore_path, os.path.join(repo_dir, ".gitignore"))
+        logger.info("Copied .gitignore file to repository")
 
-    # Copy the contents of the font-archive directory to the repository directory
+
+def _copy_single_file(source_path: str, dest_path: str) -> None:
+    """
+    Copy a single file from source to destination.
+
+    Args:
+        source_path: Path to the source file
+        dest_path: Path to the destination file
+    """
+    try:
+        shutil.copy2(source_path, dest_path)
+    except Exception as e:
+        logger.error(f"Error copying file {_sanitize_path(source_path)} to {_sanitize_path(dest_path)}: {e}")
+
+
+def _copy_directory_contents(dir_path: str, repo_dir: str) -> None:
+    """
+    Copy the contents of a directory to the repository root.
+
+    Args:
+        dir_path: Path to the source directory
+        repo_dir: Path to the repository directory
+    """
+    for subitem in os.listdir(dir_path):
+        subitem_path = os.path.join(dir_path, subitem)
+        subdest_path = os.path.join(repo_dir, subitem)
+
+        # Skip if the subitem already exists at the destination
+        if os.path.exists(subdest_path):
+            continue
+
+        # Copy the subitem to the root of the repository
+        if os.path.isdir(subitem_path):
+            try:
+                shutil.copytree(subitem_path, subdest_path)
+            except Exception as e:
+                logger.error(
+                    f"Error copying directory {_sanitize_path(subitem_path)} to {_sanitize_path(subdest_path)}: {e}")
+        else:
+            _copy_single_file(subitem_path, subdest_path)
+
+
+def _copy_log_file(repo_dir: str) -> None:
+    """
+    Copy the log file to the repository directory.
+
+    Args:
+        repo_dir: Path to the repository directory
+    """
+    log_path = os.path.join(TEMP_DIR, "font-upload.log")
+    if os.path.exists(log_path):
+        dest_log_path = os.path.join(repo_dir, "font-upload.log")
+        _copy_single_file(log_path, dest_log_path)
+        logger.info(f"Copied log file to repository: {_sanitize_path(dest_log_path)}")
+
+
+def _copy_files_to_repository(output_dir: str, repo_dir: str) -> None:
+    """
+    Copy files from the output directory to the repository directory.
+
+    Args:
+        output_dir: Source directory containing files to copy
+        repo_dir: Destination directory for the repository
+    """
+    # Copy the font archives directly to the root of the repository
     for item in os.listdir(output_dir):
         item_path = os.path.join(output_dir, item)
         dest_path = os.path.join(repo_dir, item)
@@ -1225,9 +1377,46 @@ All fonts were obtained from openly available locations.
 
         # Copy the item to the repository directory
         if os.path.isdir(item_path):
-            shutil.copytree(item_path, dest_path)
+            _copy_directory_contents(item_path, repo_dir)
         else:
-            shutil.copy2(item_path, dest_path)
+            _copy_single_file(item_path, dest_path)
+
+    logger.info("Copied files to repository")
+
+    # Copy the log file to the repository directory
+    _copy_log_file(repo_dir)
+
+
+def create_git_repo(output_dir: str, total_families: int, total_size: int) -> None:
+    """
+    Prepare files for the GitHub repository using Git and Git LFS.
+
+    Args:
+        output_dir: Directory for the repository
+        total_families: Number of font families
+        total_size: Total size of all zip files in bytes
+    """
+    logger.info("Preparing files for GitHub repository...")
+
+    # Create a parent directory for the repository
+    repo_dir = os.path.dirname(output_dir)
+    os.chdir(repo_dir)
+
+    # Create README.md with statistics and disclaimer
+    _create_readme_file(repo_dir, total_families, total_size)
+
+    # Initialize Git and Git LFS
+    lfs_initialized = _initialize_git_and_lfs(repo_dir)
+
+    # Configure Git LFS if it was initialized successfully
+    if lfs_initialized:
+        _configure_git_lfs(repo_dir)
+
+    # Copy the .gitignore file to the repository
+    _copy_gitignore_file(repo_dir)
+
+    # Copy files to the repository
+    _copy_files_to_repository(output_dir, repo_dir)
 
     logger.info("Files prepared for GitHub repository successfully")
 
@@ -1286,9 +1475,13 @@ def check_github_repo_exists(token: str, repo_name: str) -> bool:
                 return False
             else:
                 logger.error(f"Error checking if repository exists: {e}")
+                # Delete the temporary directory before exiting
+                delete_temp_directory(ask_confirmation=False)
                 sys.exit(1)
     except GithubException as e:
         logger.error(f"Error checking if repository exists: {e}")
+        # Delete the temporary directory before exiting
+        delete_temp_directory(ask_confirmation=False)
         sys.exit(1)
 
 
@@ -1308,6 +1501,8 @@ def get_github_username(token: str) -> str:
         return user.login
     except GithubException as e:
         logger.error(f"Error getting GitHub username: {e}")
+        # Delete the temporary directory before exiting
+        delete_temp_directory(ask_confirmation=False)
         sys.exit(1)
 
 
@@ -1421,6 +1616,8 @@ def create_github_repo(token: str, repo_name: str) -> None:
 
             if not success:
                 logger.error("Failed to handle existing repository")
+                # Delete the temporary directory before exiting
+                delete_temp_directory(ask_confirmation=False)
                 sys.exit(1)
 
             # If a user chose to append to an existing repo, we're done
@@ -1430,13 +1627,19 @@ def create_github_repo(token: str, repo_name: str) -> None:
         # Create a new repo
         if not _create_new_repo(user, repo_name):
             logger.error("Failed to create new repository")
+            # Delete the temporary directory before exiting
+            delete_temp_directory(ask_confirmation=False)
             sys.exit(1)
 
     except GithubException as e:
         logger.error(f"GitHub API error: {e}")
+        # Delete the temporary directory before exiting
+        delete_temp_directory(ask_confirmation=False)
         sys.exit(1)
     except Exception as e:
         logger.error(f"Error in create_github_repo: {e}")
+        # Delete the temporary directory before exiting
+        delete_temp_directory(ask_confirmation=False)
         sys.exit(1)
 
 
@@ -1615,7 +1818,7 @@ def _upload_file_to_github(repo, file_path: str, rel_path: str) -> bool:
                 content=content,
                 sha=contents.sha
             )
-            logger.info(f"Updated file {rel_path} in repository")
+            logger.info(f"Updated file {_sanitize_path(rel_path)} in repository")
         except GithubException as e:
             if e.status == 404:
                 # File doesn't exist, create it
@@ -1625,12 +1828,12 @@ def _upload_file_to_github(repo, file_path: str, rel_path: str) -> bool:
                     message=f"Add {rel_path}",
                     content=content
                 )
-                logger.info(f"Added file {rel_path} to repository")
+                logger.info(f"Added file {_sanitize_path(rel_path)} to repository")
             else:
                 raise
         return True
     except Exception as e:
-        logger.error(f"Error processing file {rel_path}: {e}")
+        logger.error(f"Error processing file {_sanitize_path(rel_path)}: {e}")
         return False
 
 
@@ -1648,15 +1851,16 @@ def _process_file(repo, repo_dir: str, file_path: str) -> None:
 
     # Check if the file is too large for direct API upload
     if _is_file_too_large(file_path):
-        logger.info(f"File {rel_path} is larger than 70MB. Using Git LFS for this file.")
+        logger.info(f"File {_sanitize_path(rel_path)} is larger than 70MB. Using Git LFS for this file.")
         try:
             # Add the file to Git
             subprocess.run(["git", "add", rel_path], check=True, cwd=repo_dir)
-            logger.info(f"Added large file {rel_path} to Git (will be handled by LFS)")
+            logger.info(f"Added large file {_sanitize_path(rel_path)} to Git (will be handled by LFS)")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Error adding large file {rel_path} to Git: {e}")
+            logger.error(f"Error adding large file {_sanitize_path(rel_path)} to Git: {e}")
             # Fall back to direct API upload with a warning
-            logger.warning(f"Falling back to direct API upload for {rel_path}. This may fail if the file is too large.")
+            logger.warning(
+                f"Falling back to direct API upload for {_sanitize_path(rel_path)}. This may fail if the file is too large.")
             _upload_file_to_github(repo, file_path, rel_path)
     else:
         # For smaller files, we can use either Git or direct API upload
@@ -1664,11 +1868,11 @@ def _process_file(repo, repo_dir: str, file_path: str) -> None:
         try:
             # Add the file to Git
             subprocess.run(["git", "add", rel_path], check=True, cwd=repo_dir)
-            logger.info(f"Added file {rel_path} to Git")
+            logger.info(f"Added file {_sanitize_path(rel_path)} to Git")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Error adding file {rel_path} to Git: {e}")
+            logger.error(f"Error adding file {_sanitize_path(rel_path)} to Git: {e}")
             # Fall back to direct API upload
-            logger.warning(f"Falling back to direct API upload for {rel_path}")
+            logger.warning(f"Falling back to direct API upload for {_sanitize_path(rel_path)}")
             _upload_file_to_github(repo, file_path, rel_path)
 
 
@@ -1707,7 +1911,7 @@ def _process_directory(repo, repo_dir: str, directory: str) -> None:
         _display_progress_bar(progress, prefix="Uploading files:", suffix=f"File {i + 1}/{total_files}: {file_name}")
 
         # Log progress to file
-        logger.info(f"Processed file {i + 1}/{total_files}: {file_path} ({progress:.1f}%)")
+        logger.info(f"Processed file {i + 1}/{total_files}: {_sanitize_path(file_path)} ({progress:.1f}%)")
 
 
 def _connect_to_github(token: str, repo_name: str) -> Tuple[Any, str, str]:
@@ -1984,6 +2188,8 @@ def push_to_github(token: str, repo_name: str) -> None:
         logger.error(str(e))
     except Exception as e:
         logger.error(f"Error in push_to_github: {e}")
+        # Delete the temporary directory before exiting
+        delete_temp_directory(ask_confirmation=False)
         sys.exit(1)
 
 
@@ -1996,6 +2202,8 @@ def main():
 
     if not font_families:
         logger.error("No non-default fonts found")
+        # Delete the temporary directory before exiting
+        delete_temp_directory(ask_confirmation=False)
         sys.exit(1)
 
     # Create an output directory
@@ -2031,11 +2239,15 @@ def main():
         # Check GitHub LFS storage limits
         if not check_github_lfs_storage(token):
             logger.error("Aborting due to GitHub LFS storage concerns")
+            # Delete the temporary directory before exiting
+            delete_temp_directory(ask_confirmation=False)
             sys.exit(1)
 
         # Check GitHub data transfer limits
         if not check_github_data_limits(token, total_size):
             logger.error("Aborting due to GitHub data transfer concerns")
+            # Delete the temporary directory before exiting
+            delete_temp_directory(ask_confirmation=False)
             sys.exit(1)
 
         # Create a GitHub repository
@@ -2062,3 +2274,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    end_time = datetime.datetime.now()
+    logger.info(f"Script ended at: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")

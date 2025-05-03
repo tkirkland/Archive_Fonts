@@ -8,7 +8,7 @@ A Python script to scan, organize, and archive font files from Windows systems t
 - Excludes default Windows fonts
 - Groups fonts by family
 - Creates zip archives for each font family
-- Uses Python's built-in zipfile module for compression
+- Uses 7zip for compression if available (with better compression), falls back to Python's built-in zipfile module
 - Creates a local Git repository
 - Uploads to GitHub with LFS support (automatically uses LFS for files larger than 70MB)
 - Provides detailed logging and progress indicators
@@ -62,7 +62,7 @@ from that file. Otherwise, it will prompt you to enter your GitHub personal acce
   - .gitattributes for LFS configuration (tracks .zip, .7z, and other binary files)
   - .gitignore file
 - A GitHub repository named "Font-Storage" with the contents of the local Git repository
-- A log file named "font-upload.log"
+- A log file named "font-upload.log" (included in the repository)
 
 ## Disclaimer
 
