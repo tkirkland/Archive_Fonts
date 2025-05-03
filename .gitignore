@@ -42,7 +42,7 @@ github_token.txt
 output/
 *.zip
 *.log
+!font-upload.log
 
 # Jupyter Notebook
 .ipynb_checkpoints
-

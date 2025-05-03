@@ -59,7 +59,7 @@ from that file. Otherwise, it will prompt you to enter your GitHub personal acce
 - A Git repository in the parent directory containing:
   - The contents of the Font-Storage directory (zip files)
   - README.md with statistics and disclaimer
-  - .gitattributes for LFS configuration (tracks .zip, .7z, and any file >70MB)
+  - .gitattributes for LFS configuration (tracks .zip, .7z, and other binary files)
   - .gitignore file
 - A GitHub repository named "Font-Storage" with the contents of the local Git repository
 - A log file named "font-upload.log"

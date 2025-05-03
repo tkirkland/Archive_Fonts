@@ -68,15 +68,9 @@ class ColoredConsoleHandler(logging.StreamHandler):
             print(msg)
 
 
-# Configure console logging first
-console_handler = ColoredConsoleHandler()
-console_formatter = NoMicrosecondsFormatter('%(asctime)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_formatter)
-
-# Configure the root logger with just a console handler initially
+# Configure the root logger
 logger: Logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-logger.addHandler(console_handler)
 # Remove default handlers
 logger.propagate = False
 
@@ -811,6 +805,33 @@ def _get_zip_size(zip_path: str) -> int:
         return 0
 
 
+def _display_progress_bar(progress: float, width: int = 50, prefix: str = '', suffix: str = '') -> None:
+    """
+    Display a progress bar in the console.
+
+    Args:
+        progress: Progress as a percentage (0-100)
+        width: Width of the progress bar in characters
+        prefix: Text to display before the progress bar
+        suffix: Text to display after the progress bar
+    """
+    # Ensure progress is between 0 and 100
+    progress = min(max(progress, 0), 100)
+
+    # Calculate the number of filled blocks
+    filled_length = int(width * progress / 100)
+
+    # Create the progress bar
+    bar = '█' * filled_length + '-' * (width - filled_length)
+
+    # Print the progress bar
+    print(f'\r{prefix} |{bar}| {progress:.1f}% {suffix}', end='', flush=True)
+
+    # Print a newline when progress is complete
+    if progress == 100:
+        print()
+
+
 def _get_cpu_core_count() -> int:
     """
     Get the number of CPU cores on the host machine.
@@ -1089,11 +1110,15 @@ def create_zips(font_families: Dict[str, List[str]], output_dir: str) -> Tuple[L
                 # Log task completion
                 logger.info(f"Finished archive task for {family}")
 
-                # Log progress
+                # Log progress to file only
                 completed = len(archive_paths)
                 progress = completed / total_families * 100
                 logger.info(
                     f"Progress: {progress:.1f}% - Created archive for {family} ({archive_size / 1024 / 1024:.2f} MB)")
+
+                # Display progress bar
+                suffix = f"Created archive for {family} ({archive_size / 1024 / 1024:.2f} MB)"
+                _display_progress_bar(progress, prefix="Creating archives:", suffix=suffix)
 
                 # Check if Ctrl+C was pressed
                 if exit_flag:
@@ -1168,16 +1193,16 @@ All fonts were obtained from openly available locations.
 
         # Add .gitattributes file for Git LFS
         with open(os.path.join(repo_dir, ".gitattributes"), 'w') as f:
-            # Track files larger than 70MB with Git LFS
+            # Track specific file types with Git LFS
             f.write("*.zip filter=lfs diff=lfs merge=lfs -text\n")
             f.write("*.7z filter=lfs diff=lfs merge=lfs -text\n")
-            # Add a size-based pattern for Git LFS
-            f.write("*.[!g][!i][!t]* filter=lfs diff=lfs merge=lfs -text size>=70M\n")
+            # Track other binary files with Git LFS (excluding .git files)
+            f.write("*.[!g][!i][!t]* filter=lfs diff=lfs merge=lfs -text\n")
 
         # Add .gitattributes to Git
         subprocess.run(["git", "add", ".gitattributes"], check=True, cwd=repo_dir)
         subprocess.run(["git", "commit", "-m", "Initialize Git LFS"], check=True, cwd=repo_dir)
-        logger.info("Git LFS configured to track files larger than 70MB")
+        logger.info("Git LFS configured to track zip, 7z, and other binary files")
     except subprocess.CalledProcessError as e:
         logger.error(f"Error initializing Git or Git LFS: {e}")
         print(f"\nError initializing Git or Git LFS: {e}")
@@ -1326,9 +1351,13 @@ def _handle_existing_repo(repo: Any, repo_name: str) -> Tuple[bool, bool]:
         - should_append: True if the user wants to append to existing repo, False if deleted or error
     """
     print(f"\nRepository '{repo_name}' already exists.")
-    print("Do you want to delete it and start fresh? (y/n)")
+    print("Choose an option:")
+    print("1. Fresh (delete existing repository and start fresh)")
+    print("2. Append (add to existing repository)")
 
-    if input().lower() != 'y':
+    choice = input("Enter your choice (1 or 2): ").strip()
+
+    if choice == "2" or choice.lower() == "append":
         logger.info("Will append to existing repository")
         return True, True  # Success should append
 
@@ -1652,16 +1681,33 @@ def _process_directory(repo, repo_dir: str, directory: str) -> None:
         repo_dir: Local repository directory
         directory: Directory to process
     """
-    # Get all files in the directory
+    # First, count the total number of files to process
+    total_files = 0
+    file_list = []
+
     for root, dirs, files in os.walk(directory):
         # Skip .git directory
         if '.git' in dirs:
             dirs.remove('.git')
 
-        # Process each file
         for file in files:
             file_path = os.path.join(root, file)
-            _process_file(repo, repo_dir, file_path)
+            file_list.append(file_path)
+            total_files += 1
+
+    logger.info(f"Found {total_files} files to process")
+
+    # Process each file with progress tracking
+    for i, file_path in enumerate(file_list):
+        _process_file(repo, repo_dir, file_path)
+
+        # Update progress bar
+        progress = (i + 1) / total_files * 100
+        file_name = os.path.basename(file_path)
+        _display_progress_bar(progress, prefix="Uploading files:", suffix=f"File {i + 1}/{total_files}: {file_name}")
+
+        # Log progress to file
+        logger.info(f"Processed file {i + 1}/{total_files}: {file_path} ({progress:.1f}%)")
 
 
 def _connect_to_github(token: str, repo_name: str) -> Tuple[Any, str, str]:
