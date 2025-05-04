@@ -933,7 +933,7 @@ def _create_zip_with_7zip(font_paths: List[str], zip_path: str) -> bool:
         # Get CPU core count to determine compression level
         cpu_cores = _get_cpu_core_count()
         # Use a compression level based on CPU cores but cap it at 9
-        compression_level = min(cpu_cores, 7)
+        compression_level = min(cpu_cores, 9)
 
         # Create a temporary directory to store the files with just their basename
         with tempfile.TemporaryDirectory() as temp_dir:
