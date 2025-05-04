@@ -1376,9 +1376,8 @@ def _copy_files_to_repository(output_dir: str, repo_dir: str) -> None:
             continue
 
         # Copy the item to the repository directory
-        if os.path.isdir(item_path):
-            _copy_directory_contents(item_path, repo_dir)
-        else:
+        # Only copy files, not directories, to avoid duplication
+        if not os.path.isdir(item_path):
             _copy_single_file(item_path, dest_path)
 
     logger.info("Copied files to repository")
@@ -1392,14 +1391,18 @@ def create_git_repo(output_dir: str, total_families: int, total_size: int) -> No
     Prepare files for the GitHub repository using Git and Git LFS.
 
     Args:
-        output_dir: Directory for the repository
+        output_dir: Directory containing the font archives
         total_families: Number of font families
         total_size: Total size of all zip files in bytes
     """
     logger.info("Preparing files for GitHub repository...")
 
-    # Create a parent directory for the repository
-    repo_dir = os.path.dirname(output_dir)
+    # Create a new directory for the repository (sibling to the output directory)
+    repo_dir = os.path.join(os.path.dirname(output_dir), REPO_NAME)
+
+    # Create the repository directory if it doesn't exist
+    os.makedirs(repo_dir, exist_ok=True)
+
     os.chdir(repo_dir)
 
     # Create README.md with statistics and disclaimer
@@ -2265,7 +2268,7 @@ def main():
     except Exception as e:
         logger.error(f"Error during GitHub processing: {e}")
         print(f"\nAn error occurred during GitHub processing: {e}")
-        print("The local repository has been created and can be found in the Font-Storage directory.")
+        print(f"The local repository has been created and can be found in the {REPO_NAME} directory.")
 
         # Clean up the temporary directory even if there was an error
         delete_temp_directory()
